@@ -6,8 +6,7 @@ The package is independent of Slice Media DevKit and can be used in any Webflow-
 
 ## Install
 
-The package is private during incubation and is not published to npm yet. During the public
-prerelease, install it from npm's `next` tag together with its Swiper peer dependency:
+Install the public release candidate from npm's `next` tag together with its Swiper peer dependency:
 
 ```sh
 pnpm add @slicemedia/swiper-adapter@next swiper
@@ -111,4 +110,28 @@ pnpm install
 pnpm check
 ```
 
-The code is MIT licensed. Swiper is a separate upstream dependency distributed under its own license. Webflow is referenced descriptively; this project is not affiliated with or endorsed by Webflow.
+## Support and maintenance
+
+The published package deliberately declares no additional Node.js engine, operating-system, CPU,
+or libc restriction. Browser compatibility follows the installed upstream Swiper version and the
+standard browser APIs used by enabled adapter features; optional mutation and resize observers are
+skipped when unavailable. The peer range in `package.json` is the authoritative Swiper
+compatibility contract.
+
+Before version 1.0, the most recent version under npm's `next` tag is the actively maintained
+release-candidate line. Once a `latest` release exists, the current `latest` line receives compatible
+security and defect fixes while `next` previews upcoming changes. Earlier `0.x` lines are maintained
+on a best-effort basis, and a minor `0.x` release may contain a breaking change documented in the
+changelog. Pin versions for production projects and review release notes before upgrading. Support
+is community-based and has no service-level guarantee. An exact semantic version identifies
+immutable package contents; `next` and `latest` are movable npm dist-tags, not versions.
+
+## AI-assisted development and independence
+
+AI tools assisted substantially with this project's implementation, tests, and documentation.
+AI-generated or AI-reviewed code can still contain defects. Production use requires human review,
+project-specific testing, and appropriate accessibility, security, and browser validation.
+
+The code is MIT licensed. Swiper is a separate upstream dependency distributed under its own
+license. The names Swiper and Webflow are used only to describe compatibility. This project is not
+affiliated with, sponsored by, or endorsed by the Swiper maintainers or Webflow.

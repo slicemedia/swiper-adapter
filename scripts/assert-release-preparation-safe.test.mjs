@@ -36,8 +36,8 @@ function expectMutationRejected(label, mutate, expectedError) {
   assert.match(errors.join("\n"), expectedError);
 }
 
-describe("private release preparation", () => {
-  it("accepts the exact pinned version-only workflow for the private repository", async () => {
+describe("release preparation", () => {
+  it("accepts the exact pinned version-only workflow before repository visibility changes", async () => {
     assert.deepEqual(validate(), []);
 
     const result = await run({

@@ -1,3 +1,13 @@
 # Changesets
 
-Add a changeset for every user-visible change. The package remains private until Slice Media explicitly approves a public release.
+The initial public `0.1.0` work is consolidated in the root changelog. Add a changeset for every
+subsequent user-visible change:
+
+```sh
+pnpm changeset
+```
+
+Use patch releases for compatible fixes. While the package remains below `1.0.0`, use a minor
+release for compatible features or documented breaking changes; after `1.0.0`, breaking changes
+require a major release. Document every breaking change prominently in its changeset and release
+notes.

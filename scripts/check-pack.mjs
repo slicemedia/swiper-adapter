@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-const allowedFiles = new Set(["LICENSE", "README.md", "package.json"]);
+const allowedFiles = new Set(["CHANGELOG.md", "LICENSE", "README.md", "package.json"]);
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
 function run(command, args) {
