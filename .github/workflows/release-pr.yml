@@ -1,3 +1,4 @@
+# Keep this checked-in workflow registered after public launch housekeeping.
 name: Release PR
 
 on:
