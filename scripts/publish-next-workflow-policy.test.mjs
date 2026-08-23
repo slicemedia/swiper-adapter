@@ -11,7 +11,13 @@ import {
 } from "./assert-publish-next-safe.mjs";
 import { calculateArchiveHashes, validatePackResult } from "./prepare-npm-publication.mjs";
 import { validatePublishNextWorkflow } from "./publish-next-workflow-policy.mjs";
-import { validatePublicationReceipt, validateRegistryMetadata } from "./verify-npm-publication.mjs";
+import {
+  registryAvailabilityPolicy,
+  validateProvenanceAttestations,
+  validatePublicationReceipt,
+  validateRegistryMetadata,
+  waitForVerifiedPublication,
+} from "./verify-npm-publication.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = await readFile(
@@ -38,6 +44,86 @@ const publishEnvironment = {
   GITHUB_SHA: commit,
   SLICEMEDIA_RELEASE_ENVIRONMENT: "npm-next",
 };
+const provenancePredicateType = "https://slsa.dev/provenance/v1";
+
+function createRegistryMetadata(hashes) {
+  return {
+    name: publicManifest.name,
+    versions: {
+      [publicManifest.version]: {
+        name: publicManifest.name,
+        version: publicManifest.version,
+        dist: {
+          ...hashes,
+          attestations: {
+            url: `https://registry.npmjs.org/-/npm/v1/attestations/${globalThis.encodeURIComponent(publicManifest.name)}@${publicManifest.version}`,
+            provenance: { predicateType: provenancePredicateType },
+          },
+          tarball: "https://registry.npmjs.org/example.tgz",
+        },
+      },
+    },
+    "dist-tags": { next: publicManifest.version },
+  };
+}
+
+function createProvenanceDocument(hashes, sourceCommit = commit) {
+  const statement = {
+    _type: "https://in-toto.io/Statement/v1",
+    subject: [
+      {
+        name: `pkg:npm/%40slicemedia/swiper-adapter@${publicManifest.version}`,
+        digest: {
+          sha512: Buffer.from(hashes.integrity.slice("sha512-".length), "base64").toString("hex"),
+        },
+      },
+    ],
+    predicateType: provenancePredicateType,
+    predicate: {
+      buildDefinition: {
+        externalParameters: {
+          workflow: {
+            ref: "refs/heads/main",
+            repository: "https://github.com/slicemedia/swiper-adapter",
+            path: ".github/workflows/publish-next.yml",
+          },
+        },
+        resolvedDependencies: [
+          {
+            uri: "git+https://github.com/slicemedia/swiper-adapter@refs/heads/main",
+            digest: { gitCommit: sourceCommit },
+          },
+        ],
+      },
+      runDetails: {
+        builder: { id: "https://github.com/actions/runner/github-hosted" },
+      },
+    },
+  };
+  return {
+    attestations: [
+      {
+        predicateType: provenancePredicateType,
+        bundle: {
+          dsseEnvelope: {
+            payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
+            signatures: [{ sig: "synthetic-signature" }],
+          },
+        },
+      },
+    ],
+  };
+}
+
+function jsonResponse(body, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async json() {
+      return body;
+    },
+  };
+}
 
 test("accepts only token-free preparation, minimal OIDC publication, and no-OIDC verification", () => {
   assert.deepEqual(validatePublishNextWorkflow(workflow), []);
@@ -95,6 +181,7 @@ test("rejects changes to every publish trust boundary", () => {
     (source) => source.replace("fetch-depth: 0", "fetch-depth: 1"),
     (source) => source.replace("runtime: node@24", "runtime: node@latest"),
     (source) => source.replace("npm@11.19.0", "npm@12.0.0"),
+    (source) => source.replace("timeout-minutes: 25", "timeout-minutes: 10"),
     (source) =>
       source.replace("${{ secrets.SLICEMEDIA_FORBIDDEN_TERMS }}", "${{ secrets.UNRELATED_VALUE }}"),
     (source) => source.replace('= "11.19.0"', '= "11.19.1"'),
@@ -187,20 +274,8 @@ test("binds pack output, receipt, source commit, and registry metadata to one ex
   };
   assert.deepEqual(validatePublicationReceipt(receipt, publicManifest, hashes, commit), []);
 
-  const metadata = {
-    name: publicManifest.name,
-    versions: {
-      [publicManifest.version]: {
-        name: publicManifest.name,
-        version: publicManifest.version,
-        dist: {
-          ...hashes,
-          tarball: "https://registry.npmjs.org/example.tgz",
-        },
-      },
-    },
-    "dist-tags": { next: publicManifest.version },
-  };
+  const metadata = createRegistryMetadata(hashes);
+  const provenance = createProvenanceDocument(hashes);
   assert.deepEqual(
     validateRegistryMetadata(
       metadata,
@@ -211,6 +286,15 @@ test("binds pack output, receipt, source commit, and registry metadata to one ex
     ),
     [],
   );
+  assert.deepEqual(
+    validateProvenanceAttestations(provenance, {
+      commit,
+      name: publicManifest.name,
+      sha512: Buffer.from(hashes.integrity.slice("sha512-".length), "base64").toString("hex"),
+      version: publicManifest.version,
+    }),
+    [],
+  );
   assert.notDeepEqual(
     validateRegistryMetadata(
       metadata,
@@ -219,6 +303,15 @@ test("binds pack output, receipt, source commit, and registry metadata to one ex
       "sha512-unrelated",
       hashes.shasum,
     ),
+    [],
+  );
+  assert.notDeepEqual(
+    validateProvenanceAttestations(createProvenanceDocument(hashes, "b".repeat(40)), {
+      commit,
+      name: publicManifest.name,
+      sha512: Buffer.from(hashes.integrity.slice("sha512-".length), "base64").toString("hex"),
+      version: publicManifest.version,
+    }),
     [],
   );
   assert.notDeepEqual(
@@ -238,5 +331,83 @@ test("binds pack output, receipt, source commit, and registry metadata to one ex
       commit,
     ),
     [],
+  );
+});
+
+test("waits immediately at a fixed cadence for registry metadata and exact provenance", async () => {
+  const hashes = calculateArchiveHashes(Buffer.from("synthetic package archive"));
+  const metadata = createRegistryMetadata(hashes);
+  const provenance = createProvenanceDocument(hashes);
+  const registryUrl = `https://registry.npmjs.org/${globalThis.encodeURIComponent(publicManifest.name)}`;
+  const events = [];
+  let currentTime = 0;
+  let registryRequests = 0;
+
+  await waitForVerifiedPublication({
+    expectedCommit: commit,
+    expectedIntegrity: hashes.integrity,
+    expectedName: publicManifest.name,
+    expectedShasum: hashes.shasum,
+    expectedVersion: publicManifest.version,
+    fetchImpl: async (url) => {
+      events.push(`fetch:${url}`);
+      if (url === registryUrl) {
+        registryRequests += 1;
+        return registryRequests === 1 ? jsonResponse({}, 404) : jsonResponse(metadata);
+      }
+      return jsonResponse(provenance);
+    },
+    log: () => {},
+    now: () => currentTime,
+    sleep: async (delayMs) => {
+      events.push(`sleep:${delayMs}`);
+      currentTime += delayMs;
+    },
+  });
+
+  assert.equal(events[0], `fetch:${registryUrl}`);
+  assert.equal(events[1], `sleep:${registryAvailabilityPolicy.retryDelayMs}`);
+  assert.equal(registryRequests, 2);
+  assert.equal(currentTime, registryAvailabilityPolicy.retryDelayMs);
+});
+
+test("bounds registry polling to the reviewed 18-minute availability window", async () => {
+  const hashes = calculateArchiveHashes(Buffer.from("synthetic package archive"));
+  const delays = [];
+  let currentTime = 0;
+  let requests = 0;
+
+  await assert.rejects(
+    waitForVerifiedPublication({
+      expectedCommit: commit,
+      expectedIntegrity: hashes.integrity,
+      expectedName: publicManifest.name,
+      expectedShasum: hashes.shasum,
+      expectedVersion: publicManifest.version,
+      fetchImpl: async () => {
+        requests += 1;
+        return jsonResponse({}, 404);
+      },
+      log: () => {},
+      now: () => currentTime,
+      sleep: async (delayMs) => {
+        delays.push(delayMs);
+        currentTime += delayMs;
+      },
+    }),
+    /not verifiable within 18 minutes/u,
+  );
+
+  assert.deepEqual(registryAvailabilityPolicy, {
+    pollingWindowMs: 18 * 60_000,
+    requestTimeoutMs: 10_000,
+    retryDelayMs: 15_000,
+  });
+  assert.equal(requests, 73);
+  assert.equal(delays.length, 72);
+  assert.ok(delays.every((delayMs) => delayMs === 15_000));
+  assert.equal(
+    delays.reduce((total, delayMs) => total + delayMs, 0),
+    18 * 60_000,
   );
 });

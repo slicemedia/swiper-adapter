@@ -37,7 +37,7 @@ function expectMutationRejected(label, mutate, expectedError) {
 }
 
 describe("release preparation", () => {
-  it("accepts the exact pinned version-only workflow before repository visibility changes", async () => {
+  it("accepts the exact pinned version-only workflow while publication is disabled", async () => {
     assert.deepEqual(validate(), []);
 
     const result = await run({

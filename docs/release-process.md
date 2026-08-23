@@ -63,7 +63,9 @@ guard also passes. The workflow:
 - passes only that archive to the minimal OIDC job;
 - rejects registry, user-configuration, and classic-token overrides;
 - publishes to the explicit `https://registry.npmjs.org/` registry with provenance; and
-- verifies that registry integrity matches the reviewed local archive.
+- allows npm's publish-time scan up to 18 minutes to make the version available; and
+- verifies the exact registry integrity, `next` tag, and SLSA provenance source against the reviewed
+  archive and commit.
 
 After the first verified OIDC release, set the package's npm Publishing access to require
 two-factor authentication and disallow tokens. Trusted publishing is additive, so this setting

@@ -113,6 +113,7 @@ jobs:
       - publish
     if: github.repository == 'slicemedia/swiper-adapter' && github.event.repository.private == false && github.ref == 'refs/heads/main' && vars.SLICEMEDIA_NPM_PUBLISH_NEXT_ENABLED == 'true' && needs.prepare.result == 'success' && needs.publish.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
