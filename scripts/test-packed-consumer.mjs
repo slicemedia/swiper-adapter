@@ -76,6 +76,7 @@ try {
           noEmit: true,
           strict: true,
           target: "ES2022",
+          types: ["vite/client"],
         },
         include: ["src/**/*.ts"],
       },
@@ -91,15 +92,13 @@ try {
     join(consumerDirectory, "src/main.ts"),
     `import { createResponsiveSwiper } from "@slicemedia/swiper-adapter";
 import { createWebflowSwiperOptions } from "@slicemedia/swiper-adapter/webflow";
-import "swiper/css";
-import "swiper/css/a11y";
-import "swiper/css/navigation";
-import "swiper/css/pagination";
+import "./slider.css";
 
 const root = document.querySelector<HTMLElement>("[data-test-root]");
 if (root) {
   const controller = createResponsiveSwiper({
     target: root,
+    structure: { equalHeight: true },
     swiper: (element) =>
       createWebflowSwiperOptions(element, {
         navigation: false,
@@ -110,6 +109,15 @@ if (root) {
   controller.init();
 }
 `,
+  );
+  await writeFile(
+    join(consumerDirectory, "src/slider.css"),
+    [
+      '@import "swiper/css" layer(swiper);',
+      '@import "swiper/css/a11y" layer(swiper);',
+      '@import "swiper/css/navigation" layer(swiper);',
+      '@import "swiper/css/pagination" layer(swiper);',
+    ].join("\n"),
   );
   await writeFile(join(consumerDirectory, "runtime.mjs"), getRuntimeTestSource());
 
@@ -197,11 +205,13 @@ assert.deepEqual(
   "Package imports must not register globals.",
 );
 
-const dom = new JSDOM(\`<section class="swiper" data-wft-slider>
-  <div class="swiper-wrapper">
-    <article class="swiper-slide" data-wft-slide-key="one">One</article>
-    <article class="swiper-slide" data-wft-slide-key="two">Two</article>
-    <article class="swiper-slide" data-wft-slide-key="three">Three</article>
+const dom = new JSDOM(\`<section class="cards-component" data-wft-slider>
+  <div class="cards-cms">
+  <div class="cards-grid" data-wft-slider-track role="list" style="display: grid; gap: 20px">
+    <article class="card" data-wft-slider-slide data-wft-slide-key="one">One</article>
+    <article class="card" data-wft-slider-slide data-wft-slide-key="two">Two</article>
+    <article class="card" data-wft-slider-slide data-wft-slide-key="three">Three</article>
+  </div>
   </div>
   <button type="button" data-wft-slider-prev></button>
   <button type="button" data-wft-slider-next></button>
@@ -225,8 +235,9 @@ globalThis.requestAnimationFrame = browserWindow.requestAnimationFrame.bind(brow
 globalThis.cancelAnimationFrame = browserWindow.cancelAnimationFrame.bind(browserWindow);
 
 const root = browserWindow.document.querySelector("[data-wft-slider]");
-Object.defineProperty(root, "clientWidth", { configurable: true, value: 800 });
-Object.defineProperty(root, "offsetWidth", { configurable: true, value: 800 });
+const container = root.querySelector(".cards-cms");
+Object.defineProperty(container, "clientWidth", { configurable: true, value: 800 });
+Object.defineProperty(container, "offsetWidth", { configurable: true, value: 800 });
 root.getBoundingClientRect = () => ({
   bottom: 300,
   height: 300,
@@ -239,8 +250,11 @@ root.getBoundingClientRect = () => ({
   toJSON() {},
 });
 root.getClientRects = () => [root.getBoundingClientRect()];
+container.getBoundingClientRect = root.getBoundingClientRect;
+container.getClientRects = root.getClientRects;
 const controller = createResponsiveSwiper({
   target: root,
+  structure: true,
   document: browserWindow.document,
   window: browserWindow,
   swiper: (element) => createWebflowSwiperOptions(element, {
@@ -250,36 +264,40 @@ const controller = createResponsiveSwiper({
 });
 controller.init();
 assert.equal(controller.getState().instanceCount, 1);
-assert.equal(root.classList.contains("swiper-initialized"), true);
-assert.ok(root.swiper?.navigation, "Navigation module was not initialized.");
-assert.ok(root.swiper?.a11y, "A11y module was not initialized.");
-assert.ok(root.swiper?.pagination, "Pagination module was not initialized.");
+assert.equal(container.classList.contains("swiper-initialized"), true);
+assert.ok(container.swiper?.navigation, "Navigation module was not initialized.");
+assert.ok(container.swiper?.a11y, "A11y module was not initialized.");
+assert.ok(container.swiper?.pagination, "Pagination module was not initialized.");
 assert.equal(root.querySelector("[data-wft-slider-prev]").getAttribute("aria-label"), "Previous item");
 
-root.swiper.slideToLoop(1, 0, false);
+container.swiper.slideToLoop(1, 0, false);
 await new Promise((resolve) => browserWindow.requestAnimationFrame(resolve));
-assert.equal(root.swiper.realIndex, 1);
-assert.equal(root.swiper.slides[root.swiper.activeIndex].getAttribute("data-wft-slide-key"), "two");
-const originalSlideToLoop = root.swiper.slideToLoop.bind(root.swiper);
+assert.equal(container.swiper.realIndex, 1);
+assert.equal(container.swiper.slides[container.swiper.activeIndex].getAttribute("data-wft-slide-key"), "two");
+const originalSlideToLoop = container.swiper.slideToLoop.bind(container.swiper);
 const restoredLoopIndexes = [];
-root.swiper.slideToLoop = (index, ...args) => {
+container.swiper.slideToLoop = (index, ...args) => {
   restoredLoopIndexes.push(index);
   return originalSlideToLoop(index, ...args);
 };
 root.querySelector(".swiper-wrapper").insertAdjacentHTML(
   "afterbegin",
-  '<article class="swiper-slide" data-wft-slide-key="new">New</article>',
+  '<article class="card" data-wft-slider-slide data-wft-slide-key="new">New</article>',
 );
 controller.refresh();
 assert.equal(restoredLoopIndexes.at(-1), 1);
-assert.ok(root.swiper.slides.some((slide) => slide.getAttribute("data-wft-slide-key") === "two"));
+assert.ok(container.swiper.slides.some((slide) => slide.getAttribute("data-wft-slide-key") === "two"));
 await new Promise((resolve) => browserWindow.requestAnimationFrame(resolve));
-assert.equal(root.swiper.realIndex, 1);
-assert.equal(root.swiper.slides[root.swiper.activeIndex].getAttribute("data-wft-slide-key"), "two");
+assert.equal(container.swiper.realIndex, 1);
+assert.equal(container.swiper.slides[container.swiper.activeIndex].getAttribute("data-wft-slide-key"), "two");
 
 controller.destroy();
 assert.equal(controller.getState().instanceCount, 0);
-assert.equal(root.className, "swiper");
+assert.equal(root.className, "cards-component");
+assert.equal(container.className, "cards-cms");
+assert.equal(root.querySelector("[data-wft-slider-track]").style.display, "grid");
+assert.equal(root.querySelector("[data-wft-slider-track]").getAttribute("role"), "list");
+assert.equal(root.querySelector(".swiper-slide"), null);
 assert.equal(root.querySelector("[data-wft-slider-prev]").hasAttribute("aria-label"), false);
 assert.equal(root.querySelector('[data-wft-slide-key="new"]') !== null, true);
 `;

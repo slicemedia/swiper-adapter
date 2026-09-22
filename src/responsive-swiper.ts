@@ -1,11 +1,21 @@
 import Swiper from "swiper";
 import type { SwiperOptions } from "swiper/types";
+import {
+  isInSliderScope,
+  prepareSwiperStructure,
+  resolveSwiperStructure,
+  validateStructureSwiperOptions,
+  withStructureEvents,
+  type ResolvedSwiperStructure,
+  type SwiperStructureIssue,
+  type SwiperStructureOptions,
+} from "./structure.js";
 
 export interface SwiperLike {
   activeIndex?: number;
   destroyed?: boolean;
   destroy(deleteInstance?: boolean, cleanStyles?: boolean): void;
-  params?: { loop?: boolean };
+  params?: SwiperOptions;
   realIndex?: number;
   slideTo?(index: number, speed?: number, runCallbacks?: boolean): unknown;
   slideToLoop?(index: number, speed?: number, runCallbacks?: boolean): unknown;
@@ -23,6 +33,8 @@ export interface ViewportRange {
 export interface ResponsiveSwiperOptions {
   target: string | HTMLElement | Iterable<HTMLElement>;
   swiper?: SwiperOptions | ((element: HTMLElement, index: number) => SwiperOptions);
+  /** Opt into reversible attribute-based markup preparation. Omitted/false keeps standard markup. */
+  structure?: boolean | SwiperStructureOptions;
   enabled?: ViewportRange | ((viewportWidth: number) => boolean);
   factory?: SwiperFactory;
   document?: Document;
@@ -53,6 +65,12 @@ export interface ResponsiveSwiperEventMap {
   disable: ResponsiveSwiperState;
   destroy: ResponsiveSwiperState;
   ownershipConflict: ResponsiveSwiperOwnershipConflict;
+  structureIssue: ResponsiveSwiperStructureIssue;
+}
+
+export interface ResponsiveSwiperStructureIssue extends SwiperStructureIssue {
+  element: HTMLElement;
+  state: ResponsiveSwiperState;
 }
 
 export interface ResponsiveSwiperOwnershipConflict {
@@ -84,6 +102,9 @@ interface ElementSnapshot {
 
 interface ManagedSwiper {
   instance: SwiperLike;
+  container: HTMLElement;
+  structure?: ResolvedSwiperStructure;
+  swiperOptions: SwiperOptions;
   snapshots: ElementSnapshot[];
   originalElements: Set<Element>;
   ownedElements: Set<Element>;
@@ -113,7 +134,9 @@ function snapshotTree(root: HTMLElement): {
   snapshots: ElementSnapshot[];
   originalElements: Set<Element>;
 } {
-  const elements = [root, ...root.querySelectorAll("*")];
+  const elements = [root, ...root.querySelectorAll("*")].filter((element) =>
+    isInSliderScope(root, element),
+  );
   return {
     snapshots: elements.map((element) => ({
       element,
@@ -125,6 +148,7 @@ function snapshotTree(root: HTMLElement): {
 
 function snapshotNewAuthorElements(managed: ManagedSwiper, root: HTMLElement): void {
   for (const element of root.querySelectorAll("*")) {
+    if (!isInSliderScope(root, element)) continue;
     if (managed.originalElements.has(element) || isInsideOwnedTree(managed, element)) continue;
     managed.originalElements.add(element);
     managed.snapshots.push({
@@ -147,6 +171,7 @@ function captureOwnedElements(
   elementsBeforeVendorWork: ReadonlySet<Element>,
 ): void {
   for (const element of root.querySelectorAll("*")) {
+    if (!isInSliderScope(root, element)) continue;
     if (!elementsBeforeVendorWork.has(element) && !managed.originalElements.has(element)) {
       managed.ownedElements.add(element);
     }
@@ -170,7 +195,7 @@ function removeElementsAddedAfterSnapshot(
   root: HTMLElement,
 ): void {
   const addedElements = [...root.querySelectorAll("*")].filter(
-    (element) => !snapshot.originalElements.has(element),
+    (element) => isInSliderScope(root, element) && !snapshot.originalElements.has(element),
   );
   for (const element of addedElements.reverse()) {
     const containsAuthorContent = [...snapshot.originalElements].some((authorElement) =>
@@ -332,8 +357,9 @@ export function createResponsiveSwiper(
   ): void => {
     for (const listener of listeners.get(event) ?? []) listener(payload);
   };
-  const emitState = (event: Exclude<ResponsiveSwiperEvent, "ownershipConflict">): void =>
-    emit(event, getState());
+  const emitState = (
+    event: Exclude<ResponsiveSwiperEvent, "ownershipConflict" | "structureIssue">,
+  ): void => emit(event, getState());
 
   const isMeasurable = (element: HTMLElement): boolean =>
     options.deferUntilMeasurable === false ||
@@ -343,7 +369,7 @@ export function createResponsiveSwiper(
     const managed = instances.get(element);
     if (!managed) return;
     if (retainAnchor) {
-      const anchor = captureSlideAnchor(managed.instance, element, options);
+      const anchor = captureSlideAnchor(managed.instance, managed.container, options);
       if (anchor) retainedAnchors.set(element, anchor);
     }
     const errors: unknown[] = [];
@@ -354,6 +380,7 @@ export function createResponsiveSwiper(
     }
     instances.delete(element);
     if (rootOwners.get(element) === ownerToken) rootOwners.delete(element);
+    if (rootOwners.get(managed.container) === ownerToken) rootOwners.delete(managed.container);
     try {
       removeVendorElements(managed);
     } catch (error) {
@@ -376,7 +403,7 @@ export function createResponsiveSwiper(
     const elements = nextEnabled ? resolveElements(options.target, getDocument()) : [];
     const wanted = new Set(elements);
 
-    configureResizeObserver(elements);
+    const measurableElements = new Set(elements);
 
     for (const element of instances.keys()) {
       if (!wanted.has(element) || !element.isConnected) destroyInstance(element);
@@ -384,39 +411,80 @@ export function createResponsiveSwiper(
 
     if (nextEnabled) {
       elements.forEach((element, index) => {
-        if (instances.has(element) || !isMeasurable(element)) return;
-        const currentOwner = rootOwners.get(element);
-        if (currentOwner && currentOwner !== ownerToken) {
-          emit("ownershipConflict", {
-            element,
-            owner: "adapter",
-            state: getState(),
-          });
-          return;
+        let structure: ResolvedSwiperStructure | undefined;
+        if (options.structure) {
+          const resolved = resolveSwiperStructure(element, options.structure);
+          if ("reason" in resolved) {
+            destroyInstance(element);
+            emit("structureIssue", { element, ...resolved, state: getState() });
+            return;
+          }
+          structure = resolved;
         }
-        if (!currentOwner && isExternalSwiperActive(element)) {
-          emit("ownershipConflict", {
-            element,
-            owner: "external-swiper",
-            state: getState(),
-          });
-          return;
+        const container = structure?.container ?? element;
+        measurableElements.add(container);
+        const existing = instances.get(element);
+        if (existing) {
+          if (existing.container === container && existing.structure?.track === structure?.track) {
+            // Keep the same structure object: upstream event closures refer to it.
+            if (existing.structure && structure) existing.structure.slides = structure.slides;
+            return;
+          }
+          destroyInstance(element);
+        }
+        if (!isMeasurable(element) || !isMeasurable(container)) return;
+        for (const candidate of new Set([element, container])) {
+          const currentOwner = rootOwners.get(candidate);
+          const owner = currentOwner
+            ? "adapter"
+            : isExternalSwiperActive(candidate)
+              ? "external-swiper"
+              : undefined;
+          if (owner) {
+            emit("ownershipConflict", { element: candidate, owner, state: getState() });
+            return;
+          }
         }
         const snapshot = snapshotTree(element);
         rootOwners.set(element, ownerToken);
+        rootOwners.set(container, ownerToken);
+        let instance: SwiperLike | undefined;
         try {
           const swiperOptions =
             typeof options.swiper === "function"
               ? options.swiper(element, index)
               : (options.swiper ?? {});
-          const instance = (options.factory ?? defaultFactory)(element, swiperOptions);
-          const managed: ManagedSwiper = { instance, ...snapshot, ownedElements: new Set() };
+          if (structure) {
+            validateStructureSwiperOptions(swiperOptions, structure.options);
+            prepareSwiperStructure(structure, swiperOptions);
+          }
+          instance = (options.factory ?? defaultFactory)(
+            container,
+            structure ? withStructureEvents(structure, swiperOptions) : swiperOptions,
+          );
+          const managed: ManagedSwiper = {
+            instance,
+            container,
+            swiperOptions,
+            ...(structure ? { structure } : {}),
+            ...snapshot,
+            ownedElements: new Set(),
+          };
           captureOwnedElements(managed, element, snapshot.originalElements);
           instances.set(element, managed);
-          restoreSlideAnchor(instance, element, options, retainedAnchors.get(element));
+          restoreSlideAnchor(instance, container, options, retainedAnchors.get(element));
           retainedAnchors.delete(element);
         } catch (error) {
+          // Upstream may attach element.swiper before its constructor finishes.
+          const partial = instance ?? (container as HTMLElement & { swiper?: SwiperLike }).swiper;
+          try {
+            partial?.destroy(true, true);
+          } catch {
+            /* Restore author DOM even if vendor teardown fails. */
+          }
+          instances.delete(element);
           if (rootOwners.get(element) === ownerToken) rootOwners.delete(element);
+          if (rootOwners.get(container) === ownerToken) rootOwners.delete(container);
           removeElementsAddedAfterSnapshot(snapshot, element);
           restoreTree(snapshot);
           throw error;
@@ -424,11 +492,48 @@ export function createResponsiveSwiper(
       });
     }
 
+    configureResizeObserver([...measurableElements]);
+
     if (enabled !== nextEnabled) {
       enabled = nextEnabled;
       emitState(enabled ? "enable" : "disable");
     } else {
       enabled = nextEnabled;
+    }
+  };
+
+  const updateInstances = (): void => {
+    for (const [element, managed] of instances) {
+      if (!isMeasurable(element) || !isMeasurable(managed.container)) continue;
+      const anchor = captureSlideAnchor(managed.instance, managed.container, options);
+      snapshotNewAuthorElements(managed, element);
+      const beforeUpdate = new Set(element.querySelectorAll("*"));
+      if (managed.structure) {
+        prepareSwiperStructure(managed.structure, managed.instance.params ?? managed.swiperOptions);
+      }
+      try {
+        managed.instance.update();
+        restoreSlideAnchor(managed.instance, managed.container, options, anchor);
+      } finally {
+        captureOwnedElements(managed, element, beforeUpdate);
+      }
+    }
+  };
+
+  const observeDocument = (): void => {
+    const documentObject = getDocument();
+    if (documentObject)
+      observer?.observe(documentObject.documentElement, { childList: true, subtree: true });
+  };
+
+  // Swiper pagination/loop updates can mutate children themselves. Observe external
+  // CMS work, not our own synchronous updates, to avoid an endless refresh cycle.
+  const withoutMutationObservation = (work: () => void): void => {
+    observer?.disconnect();
+    try {
+      work();
+    } finally {
+      observeDocument();
     }
   };
 
@@ -453,8 +558,32 @@ export function createResponsiveSwiper(
     const MutationObserverConstructor = (windowObject as (Window & typeof globalThis) | undefined)
       ?.MutationObserver;
     if (!options.observeMutations || !documentObject || !MutationObserverConstructor) return;
-    observer = new MutationObserverConstructor(queueRefresh);
-    observer.observe(documentObject.documentElement, { childList: true, subtree: true });
+    observer = new MutationObserverConstructor((records) => {
+      const roots = new Set([
+        ...resolveElements(options.target, documentObject),
+        ...instances.keys(),
+      ]);
+      const relevant = records.some((record) => {
+        for (const root of roots) {
+          const currentOwner = rootOwners.get(root);
+          if (currentOwner && currentOwner !== ownerToken) continue;
+          const managed = instances.get(root);
+          const target =
+            record.target.nodeType === 1 ? (record.target as Element) : record.target.parentElement;
+          if (
+            target &&
+            isInSliderScope(root, target) &&
+            (!managed || !isInsideOwnedTree(managed, target))
+          )
+            return true;
+          if ([...record.addedNodes, ...record.removedNodes].some((node) => node.contains(root)))
+            return true;
+        }
+        return false;
+      });
+      if (relevant) queueRefresh();
+    });
+    observeDocument();
   };
 
   function configureResizeObserver(elements: readonly HTMLElement[] = []): void {
@@ -494,7 +623,7 @@ export function createResponsiveSwiper(
       }
       configureMutationObserver();
       try {
-        reconcile();
+        withoutMutationObservation(reconcile);
         emitState("init");
       } catch (error) {
         controller.destroy();
@@ -503,28 +632,18 @@ export function createResponsiveSwiper(
     },
     refresh() {
       if (!initialized) return;
-      reconcile();
-      for (const [element, managed] of instances) {
-        if (!isMeasurable(element)) continue;
-        const anchor = captureSlideAnchor(managed.instance, element, options);
-        snapshotNewAuthorElements(managed, element);
-        const beforeUpdate = new Set(element.querySelectorAll("*"));
-        managed.instance.update();
-        captureOwnedElements(managed, element, beforeUpdate);
-        restoreSlideAnchor(managed.instance, element, options, anchor);
-      }
+      withoutMutationObservation(() => {
+        reconcile();
+        updateInstances();
+      });
       emitState("refresh");
     },
     update() {
-      for (const [element, managed] of instances) {
-        if (!isMeasurable(element)) continue;
-        const anchor = captureSlideAnchor(managed.instance, element, options);
-        snapshotNewAuthorElements(managed, element);
-        const beforeUpdate = new Set(element.querySelectorAll("*"));
-        managed.instance.update();
-        captureOwnedElements(managed, element, beforeUpdate);
-        restoreSlideAnchor(managed.instance, element, options, anchor);
-      }
+      if (!initialized) return;
+      withoutMutationObservation(() => {
+        reconcile();
+        updateInstances();
+      });
     },
     destroy() {
       if (!initialized) return;
@@ -559,7 +678,10 @@ export function createResponsiveSwiper(
     setOptions(nextOptions) {
       const previousWindow = getWindow();
       const previousDocument = getDocument();
-      const needsRecreate = nextOptions.swiper !== undefined || nextOptions.factory !== undefined;
+      const needsRecreate =
+        nextOptions.swiper !== undefined ||
+        nextOptions.factory !== undefined ||
+        nextOptions.structure !== undefined;
       if (needsRecreate) {
         for (const element of [...instances.keys()]) destroyInstance(element);
       }
@@ -586,7 +708,7 @@ export function createResponsiveSwiper(
         ) {
           configureMutationObserver();
         }
-        reconcile();
+        withoutMutationObservation(reconcile);
       }
     },
     getState,

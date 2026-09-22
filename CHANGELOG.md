@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- 6a06bfc: Add opt-in attribute-based slider structure preparation for existing Webflow grids and CMS lists. Resolve scoped tracks, slides, and containers; temporarily apply upstream classes and flex mechanics; restore authored layout and list semantics on teardown. Handle delayed or replaced tracks, new keyed CMS slides, nested controls, container ownership and measurement, failed initialization, and vendor mutation feedback. Keep standard markup and inert imports compatible.
+
 All notable changes to Slice Media Swiper Adapter are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
