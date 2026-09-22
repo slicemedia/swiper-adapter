@@ -1,6 +1,6 @@
 {
   "name": "@slicemedia/swiper-adapter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "description": "A reversible, responsive Swiper lifecycle adapter for Webflow projects.",
   "license": "MIT",
