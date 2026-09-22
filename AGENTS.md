@@ -4,10 +4,10 @@ This repository contains one side-effect-free Webflow adapter around upstream Sw
 
 ## Boundaries
 
-- Use standard Swiper markup, options, modules, and official CSS. This project is an adapter, not a fork.
+- Prefer Webflow-owned classes and neutral root/track/slide attributes with the opt-in `structure` mode. Prepare standard Swiper classes and mechanical layout temporarily at runtime; restore the authored markup on disable/destroy. Keep upstream options, modules, and official CSS. This project is an adapter, not a fork.
 - Keep the package root and opt-in `/webflow` entry inert: importing them must not initialize sliders, modify globals, or import CSS.
 - Coordinate one owner per root, preserve uniquely keyed CMS items, defer zero-width roots by default, and restore project-owned accessibility state during complete teardown.
-- Keep A11y, Navigation, and Pagination integration opt-in through upstream modules, scoped native buttons, standard classes, and official CSS.
+- Keep A11y, Navigation, and Pagination integration opt-in through upstream modules, scoped native buttons, temporary runtime classes, and official CSS. Keep authored visual styles on component classes, and retain standard-markup compatibility when structure adaptation is disabled.
 - Preserve author-owned DOM, attributes, and content. Track only vendor-created nodes and vendor-owned mutations.
 - Do not introduce site IDs, client selectors, copied production markup, credentials, deployment behavior, or dependencies on another Slice Media product.
 

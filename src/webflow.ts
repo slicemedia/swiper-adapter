@@ -1,5 +1,6 @@
 import { A11y, Navigation, Pagination } from "swiper/modules";
 import type { SwiperOptions } from "swiper/types";
+import { isInSliderScope } from "./structure.js";
 
 export type WebflowSwiperModule = NonNullable<SwiperOptions["modules"]>[number];
 export type WebflowSwiperA11yOptions = Exclude<SwiperOptions["a11y"], boolean | undefined>;
@@ -36,7 +37,7 @@ const defaultNextSelector = "[data-wft-slider-next]";
 const defaultPaginationSelector = "[data-wft-slider-pagination]";
 
 /**
- * Build scoped Swiper options for standard Webflow-authored markup.
+ * Build scoped Swiper options for Webflow-authored markup, including attribute structure mode.
  *
  * The helper is opt-in: it imports upstream modules but no CSS, creates no controls,
  * and performs no initialization. Navigation controls must be native buttons with
@@ -163,8 +164,11 @@ function resolveElement(
 ): HTMLElement | undefined {
   const element =
     typeof reference === "string"
-      ? root.querySelector(reference)
-      : (reference ?? root.querySelector(fallbackSelector));
+      ? [...root.querySelectorAll(reference)].find((candidate) => isInSliderScope(root, candidate))
+      : (reference ??
+        [...root.querySelectorAll(fallbackSelector)].find((candidate) =>
+          isInSliderScope(root, candidate),
+        ));
   if (!element) {
     if (reference !== undefined) throw new Error(`Could not find the configured ${label}.`);
     return undefined;
@@ -173,7 +177,7 @@ function resolveElement(
   if (!HTMLElementConstructor || !(element instanceof HTMLElementConstructor)) {
     throw new TypeError(`The configured ${label} must be an HTML element.`);
   }
-  if (!root.contains(element)) {
+  if (!isInSliderScope(root, element)) {
     throw new Error(`The configured ${label} must be inside its slider root.`);
   }
   return element;
